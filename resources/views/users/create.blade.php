@@ -37,6 +37,28 @@
                             @enderror
                         </div>
 
+                        <!-- Username -->
+                        <div class="col-md-6 mb-3">
+                            <label for="username" class="form-label">
+                                <i class="bi bi-person-badge me-1"></i>
+                                Username <span class="text-danger">*</span>
+                            </label>
+                            <input
+                                type="text"
+                                class="form-control @error('username') is-invalid @enderror"
+                                id="username"
+                                name="username"
+                                value="{{ old('username') }}"
+                                required
+                                placeholder="username"
+                            >
+                            @error('username')
+                                <div class="invalid-feedback">{{ $message }}</div>
+                            @enderror
+                        </div>
+                    </div>
+
+                    <div class="row">
                         <!-- Email -->
                         <div class="col-md-6 mb-3">
                             <label for="email" class="form-label">

@@ -18,10 +18,15 @@
                         Export Excel
                     </a>
                 @endif
-                <a href="{{ route('dynamic.create', $menu->id) }}" class="btn btn-primary">
-                    <i class="bi bi-plus-circle me-2"></i>
-                    Add New
-                </a>
+                @php
+                    $menuSlug = strtolower(str_replace(' ', '_', $menu->name));
+                @endphp
+                @if(auth()->user()->hasRole('admin') || auth()->user()->can("{$menuSlug}.create"))
+                    <a href="{{ route('dynamic.create', $menu->id) }}" class="btn btn-primary">
+                        <i class="bi bi-plus-circle me-2"></i>
+                        Add New
+                    </a>
+                @endif
             </div>
         </div>
     </div>
@@ -90,12 +95,87 @@
                         @endif
                     </div>
                 @else
+                    @php
+                        // Get field definitions once for reuse
+                        $fields = $menu->getFieldDefinitions();
+                    @endphp
+
+                    {{-- Bulk Actions Bar --}}
+                    @php
+                        $menuSlug = strtolower(str_replace(' ', '_', $menu->name));
+                        $canEdit = auth()->user()->hasRole('admin') || auth()->user()->can("{$menuSlug}.edit");
+                        $canDelete = auth()->user()->hasRole('admin') || auth()->user()->can("{$menuSlug}.delete");
+                    @endphp
+                    @if($canEdit || $canDelete)
+                        <div id="bulkActionsBar" class="alert alert-info d-none mb-3">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div>
+                                    <i class="bi bi-check-square me-2"></i>
+                                    <span id="selectedCount">0</span> item(s) selected
+                                </div>
+                                <div class="d-flex gap-2">
+                                    @if($canDelete)
+                                        <button type="button" class="btn btn-sm btn-danger" onclick="bulkDelete()">
+                                            <i class="bi bi-trash me-1"></i>
+                                            Delete Selected
+                                        </button>
+                                    @endif
+                                    @if($canEdit)
+                                        @php
+                                            // Check if table has boolean fields for bulk update
+                                            $booleanFields = array_filter($fields, function($field) {
+                                                return $field['type'] === 'checkbox';
+                                            });
+                                        @endphp
+                                        @if(!empty($booleanFields))
+                                            <div class="btn-group" role="group">
+                                                <button type="button" class="btn btn-sm btn-secondary dropdown-toggle" data-bs-toggle="dropdown">
+                                                    <i class="bi bi-pencil me-1"></i>
+                                                    Update Status
+                                                </button>
+                                                <ul class="dropdown-menu">
+                                                    @foreach($booleanFields as $boolField)
+                                                        <li><h6 class="dropdown-header">{{ ucwords(str_replace('_', ' ', $boolField['name'])) }}</h6></li>
+                                                        <li><a class="dropdown-item" href="#" onclick="bulkUpdate('{{ $boolField['name'] }}', 1)">Set to Active</a></li>
+                                                <li><a class="dropdown-item" href="#" onclick="bulkUpdate('{{ $boolField['name'] }}', 0)">Set to Inactive</a></li>
+                                                @if(!$loop->last)<li><hr class="dropdown-divider"></li>@endif
+                                            @endforeach
+                                        </ul>
+                                    </div>
+                                @endif
+                                @endif
+                                <button type="button" class="btn btn-sm btn-secondary" onclick="clearSelection()">
+                                    <i class="bi bi-x-circle me-1"></i>
+                                    Clear Selection
+                                </button>
+                            </div>
+                        </div>
+                    @endif
+                        </div>
+                    </div>
+
+                    <form id="bulkActionForm" method="POST" action="{{ route('dynamic.bulk-action', $menu->id) }}">
+                        @csrf
+                        <input type="hidden" name="action" id="bulkAction">
+                        <input type="hidden" name="field" id="bulkField">
+                        <input type="hidden" name="value" id="bulkValue">
+                        <input type="hidden" name="ids" id="bulkIds">
+                    </form>
+
                     <div class="table-responsive">
                         <table class="table table-hover align-middle">
                             <thead class="table-light">
                                 <tr>
                                     @php
-                                        $fields = $menu->getFieldDefinitions();
+                                        $menuSlug = strtolower(str_replace(' ', '_', $menu->name));
+                                        $canBulkAction = auth()->user()->hasRole('admin') || auth()->user()->can("{$menuSlug}.edit") || auth()->user()->can("{$menuSlug}.delete");
+                                    @endphp
+                                    @if($canBulkAction)
+                                        <th style="width: 40px;">
+                                            <input type="checkbox" class="form-check-input" id="selectAll" onchange="toggleSelectAll(this)">
+                                        </th>
+                                    @endif
+                                    @php
                                         // Filter only fields marked for display in list
                                         $displayFields = array_filter($fields, function($field) {
                                             return $field['display_in_list'] ?? false;
@@ -133,6 +213,14 @@
                             <tbody>
                                 @foreach ($data as $record)
                                     <tr>
+                                        @if($canBulkAction)
+                                            <td>
+                                                @php
+                                                    $recordId = is_array($record) ? $record['id'] : $record->id;
+                                                @endphp
+                                                <input type="checkbox" class="form-check-input row-checkbox" value="{{ $recordId }}" onchange="updateBulkActions()">
+                                            </td>
+                                        @endif
                                         @foreach($displayFields as $field)
                                             <td>
                                                 @php
@@ -177,17 +265,27 @@
                                             <div class="btn-group btn-group-sm" role="group">
                                                 @php
                                                     $recordId = is_array($record) ? $record['id'] : $record->id;
+                                                    $menuSlug = strtolower(str_replace(' ', '_', $menu->name));
+                                                    $canEdit = auth()->user()->hasRole('admin') || auth()->user()->can("{$menuSlug}.edit");
+                                                    $canDelete = auth()->user()->hasRole('admin') || auth()->user()->can("{$menuSlug}.delete");
                                                 @endphp
-                                                <a href="{{ route('dynamic.edit', [$menu->id, $recordId]) }}" class="btn btn-outline-warning" title="Edit">
-                                                    <i class="bi bi-pencil"></i>
+                                                <a href="{{ route('dynamic.show', [$menu->id, $recordId]) }}" class="btn btn-outline-info" title="View">
+                                                    <i class="bi bi-eye"></i>
                                                 </a>
-                                                <form method="POST" action="{{ route('dynamic.destroy', [$menu->id, $recordId]) }}" class="d-inline" onsubmit="return confirm('Are you sure you want to delete this record?')">
-                                                    @csrf
-                                                    @method('DELETE')
-                                                    <button type="submit" class="btn btn-outline-danger" title="Delete">
-                                                        <i class="bi bi-trash"></i>
-                                                    </button>
-                                                </form>
+                                                @if($canEdit)
+                                                    <a href="{{ route('dynamic.edit', [$menu->id, $recordId]) }}" class="btn btn-outline-warning" title="Edit">
+                                                        <i class="bi bi-pencil"></i>
+                                                    </a>
+                                                @endif
+                                                @if($canDelete)
+                                                    <form method="POST" action="{{ route('dynamic.destroy', [$menu->id, $recordId]) }}" class="d-inline" onsubmit="return confirm('Are you sure you want to delete this record?')">
+                                                        @csrf
+                                                        @method('DELETE')
+                                                        <button type="submit" class="btn btn-outline-danger" title="Delete">
+                                                            <i class="bi bi-trash"></i>
+                                                        </button>
+                                                    </form>
+                                                @endif
                                             </div>
                                         </td>
                                     </tr>
@@ -204,4 +302,83 @@
         </div>
     </div>
 </div>
+
+@push('scripts')
+<script>
+function toggleSelectAll(checkbox) {
+    const checkboxes = document.querySelectorAll('.row-checkbox');
+    checkboxes.forEach(cb => cb.checked = checkbox.checked);
+    updateBulkActions();
+}
+
+function updateBulkActions() {
+    const checkboxes = document.querySelectorAll('.row-checkbox:checked');
+    const count = checkboxes.length;
+    const bulkBar = document.getElementById('bulkActionsBar');
+    const selectedCount = document.getElementById('selectedCount');
+    const selectAll = document.getElementById('selectAll');
+
+    selectedCount.textContent = count;
+
+    if (count > 0) {
+        bulkBar.classList.remove('d-none');
+    } else {
+        bulkBar.classList.add('d-none');
+    }
+
+    // Update select all checkbox state
+    const allCheckboxes = document.querySelectorAll('.row-checkbox');
+    selectAll.checked = count === allCheckboxes.length && count > 0;
+    selectAll.indeterminate = count > 0 && count < allCheckboxes.length;
+}
+
+function getSelectedIds() {
+    const checkboxes = document.querySelectorAll('.row-checkbox:checked');
+    return Array.from(checkboxes).map(cb => cb.value);
+}
+
+function bulkDelete() {
+    const ids = getSelectedIds();
+    if (ids.length === 0) {
+        alert('Please select at least one item');
+        return;
+    }
+
+    if (!confirm(`Are you sure you want to delete ${ids.length} item(s)?`)) {
+        return;
+    }
+
+    document.getElementById('bulkAction').value = 'delete';
+    document.getElementById('bulkIds').value = JSON.stringify(ids);
+    document.getElementById('bulkActionForm').submit();
+}
+
+function bulkUpdate(field, value) {
+    const ids = getSelectedIds();
+    if (ids.length === 0) {
+        alert('Please select at least one item');
+        return;
+    }
+
+    const action = value == 1 ? 'activate' : 'deactivate';
+    const fieldLabel = field.replace(/_/g, ' ');
+
+    if (!confirm(`Are you sure you want to ${action} ${fieldLabel} for ${ids.length} item(s)?`)) {
+        return;
+    }
+
+    document.getElementById('bulkAction').value = 'update';
+    document.getElementById('bulkField').value = field;
+    document.getElementById('bulkValue').value = value;
+    document.getElementById('bulkIds').value = JSON.stringify(ids);
+    document.getElementById('bulkActionForm').submit();
+}
+
+function clearSelection() {
+    document.querySelectorAll('.row-checkbox').forEach(cb => cb.checked = false);
+    document.getElementById('selectAll').checked = false;
+    updateBulkActions();
+}
+</script>
+@endpush
 @endsection

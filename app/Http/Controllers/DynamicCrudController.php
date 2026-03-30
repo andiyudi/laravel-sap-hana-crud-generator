@@ -5,15 +5,27 @@ namespace App\Http\Controllers;
 use App\Models\Menu;
 use App\Exports\DynamicExport;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Maatwebsite\Excel\Facades\Excel;
 
+/**
+ * Dynamic CRUD Controller with Activity Logging
+ *
+ * Note: Activity logging requires Spatie Laravel Activitylog package
+ * Install: composer require spatie/laravel-activitylog
+ *
+ * The activity() helper function will be available after package installation
+ */
 class DynamicCrudController extends Controller
 {
     public function index(Request $request, $menuId)
     {
         $menu = Menu::findOrFail($menuId);
+
+        // Check permission
+        $this->checkMenuPermission($menu, 'view');
 
         // Get data with joins for related tables
         $query = DB::table($menu->table_name);
@@ -78,6 +90,9 @@ class DynamicCrudController extends Controller
     {
         $menu = Menu::findOrFail($menuId);
 
+        // Check permission
+        $this->checkMenuPermission($menu, 'create');
+
         // Get related data for foreign keys
         $relatedData = $this->getRelatedData($menu);
 
@@ -87,6 +102,9 @@ class DynamicCrudController extends Controller
     public function store(Request $request, $menuId)
     {
         $menu = Menu::findOrFail($menuId);
+
+        // Check permission
+        $this->checkMenuPermission($menu, 'create');
 
         // Build validation rules
         [$rules, $messages] = $this->buildValidationRules($menu);
@@ -108,13 +126,70 @@ class DynamicCrudController extends Controller
 
         DB::table($menu->table_name)->insert($validated);
 
+        // Log activity
+        // @phpstan-ignore-next-line - activity() helper from Spatie package
+        activity()
+            ->causedBy(Auth::user())
+            ->withProperties([
+                'table' => $menu->table_name,
+                'menu_id' => $menuId,
+                'menu_name' => $menu->name,
+                'attributes' => $validated
+            ])
+            ->log('created');
+
         return redirect()->route('dynamic.index', $menuId)
             ->with('success', 'Record created successfully.');
+    }
+
+    public function show($menuId, $id)
+    {
+        $menu = Menu::findOrFail($menuId);
+
+        // Check permission
+        $this->checkMenuPermission($menu, 'view');
+
+        // Get record with joins for related tables
+        $query = DB::table($menu->table_name);
+
+        // Add joins for relationships
+        $relationships = $menu->getRelationships();
+        foreach ($relationships as $rel) {
+            $query->leftJoin(
+                $rel['related_table'],
+                $menu->table_name . '.' . $rel['foreign_key'],
+                '=',
+                $rel['related_table'] . '.id'
+            );
+            $query->addSelect($rel['related_table'] . '.' . $rel['display_column'] . ' as ' . $rel['foreign_key'] . '_display');
+        }
+
+        $query->addSelect($menu->table_name . '.*');
+        $record = $query->where($menu->table_name . '.id', $id)->first();
+
+        if (!$record) {
+            return redirect()->route('dynamic.index', $menuId)
+                ->with('error', 'Record not found.');
+        }
+
+        // Get hasMany relationships (reverse of belongsTo)
+        $hasMany = $this->getHasManyRelationships($menu, $id);
+
+        return view('dynamic.show', [
+            'menu' => $menu,
+            'record' => $record,
+            'recordId' => $id,
+            'fields' => $menu->getFieldDefinitions(),
+            'hasMany' => $hasMany,
+        ]);
     }
 
     public function edit($menuId, $id)
     {
         $menu = Menu::findOrFail($menuId);
+
+        // Check permission
+        $this->checkMenuPermission($menu, 'edit');
 
         $record = DB::table($menu->table_name)->where('id', $id)->first();
 
@@ -131,6 +206,9 @@ class DynamicCrudController extends Controller
     public function update(Request $request, $menuId, $id)
     {
         $menu = Menu::findOrFail($menuId);
+
+        // Check permission
+        $this->checkMenuPermission($menu, 'edit');
 
         // Get old record for file handling
         $oldRecord = DB::table($menu->table_name)->where('id', $id)->first();
@@ -154,6 +232,19 @@ class DynamicCrudController extends Controller
 
         DB::table($menu->table_name)->where('id', $id)->update($validated);
 
+        // Log activity with old and new values
+        activity()
+            ->causedBy(Auth::user())
+            ->withProperties([
+                'table' => $menu->table_name,
+                'menu_id' => $menuId,
+                'menu_name' => $menu->name,
+                'record_id' => $id,
+                'old' => (array) $oldRecord,
+                'attributes' => $validated
+            ])
+            ->log('updated');
+
         return redirect()->route('dynamic.index', $menuId)
             ->with('success', 'Record updated successfully.');
     }
@@ -161,6 +252,16 @@ class DynamicCrudController extends Controller
     public function destroy($menuId, $id)
     {
         $menu = Menu::findOrFail($menuId);
+
+        // Check permission
+        $this->checkMenuPermission($menu, 'delete');
+
+        // Check if record is being used in other tables (foreign key constraint)
+        $usageCheck = $this->checkRecordUsage($menu->table_name, $id);
+        if ($usageCheck['in_use']) {
+            return redirect()->route('dynamic.index', $menuId)
+                ->with('error', "Cannot delete this record. It is being used in: {$usageCheck['tables']}. Please delete related records first.");
+        }
 
         // Get record to delete associated files
         $record = DB::table($menu->table_name)->where('id', $id)->first();
@@ -178,10 +279,137 @@ class DynamicCrudController extends Controller
 
             // Delete record
             DB::table($menu->table_name)->where('id', $id)->delete();
+
+            // Log activity
+            activity()
+                ->causedBy(Auth::user())
+                ->withProperties([
+                    'table' => $menu->table_name,
+                    'menu_id' => $menuId,
+                    'menu_name' => $menu->name,
+                    'record_id' => $id,
+                    'old' => (array) $record
+                ])
+                ->log('deleted');
         }
 
         return redirect()->route('dynamic.index', $menuId)
             ->with('success', 'Record deleted successfully.');
+    }
+
+    /**
+     * Handle bulk actions (delete, update)
+     */
+    public function bulkAction(Request $request, $menuId)
+    {
+        $menu = Menu::findOrFail($menuId);
+
+        // Check permission based on action
+        $action = $request->input('action');
+        if ($action === 'delete') {
+            $this->checkMenuPermission($menu, 'delete');
+        } else {
+            $this->checkMenuPermission($menu, 'edit');
+        }
+
+        $validated = $request->validate([
+            'action' => 'required|in:delete,update',
+            'ids' => 'required|json',
+            'field' => 'nullable|string',
+            'value' => 'nullable',
+        ]);
+
+        $ids = json_decode($validated['ids'], true);
+
+        if (empty($ids)) {
+            return redirect()->route('dynamic.index', $menuId)
+                ->with('error', 'No items selected.');
+        }
+
+        try {
+            if ($validated['action'] === 'delete') {
+                // Check if any records are being used in other tables
+                $blockedIds = [];
+                $blockedTables = [];
+
+                foreach ($ids as $id) {
+                    $usageCheck = $this->checkRecordUsage($menu->table_name, $id);
+                    if ($usageCheck['in_use']) {
+                        $blockedIds[] = $id;
+                        $blockedTables = array_merge($blockedTables, explode(', ', $usageCheck['tables']));
+                    }
+                }
+
+                if (!empty($blockedIds)) {
+                    $blockedTables = array_unique($blockedTables);
+                    return redirect()->route('dynamic.index', $menuId)
+                        ->with('error', count($blockedIds) . " record(s) cannot be deleted because they are being used in: " . implode(', ', $blockedTables) . ". Please delete related records first.");
+                }
+
+                // Get records to delete associated files
+                $records = DB::table($menu->table_name)->whereIn('id', $ids)->get();
+
+                foreach ($records as $record) {
+                    // Delete associated files
+                    foreach ($menu->getFieldDefinitions() as $field) {
+                        if (in_array($field['type'], ['image', 'file'])) {
+                            $filePath = is_array($record) ? ($record[$field['name']] ?? null) : ($record->{$field['name']} ?? null);
+                            if ($filePath && Storage::disk('public')->exists($filePath)) {
+                                Storage::disk('public')->delete($filePath);
+                            }
+                        }
+                    }
+                }
+
+                // Delete records
+                DB::table($menu->table_name)->whereIn('id', $ids)->delete();
+
+                // Log bulk delete activity
+                activity()
+                    ->causedBy(Auth::user())
+                    ->withProperties([
+                        'table' => $menu->table_name,
+                        'menu_id' => $menuId,
+                        'menu_name' => $menu->name,
+                        'record_ids' => $ids,
+                        'count' => count($ids)
+                    ])
+                    ->log('bulk_deleted');
+
+                return redirect()->route('dynamic.index', $menuId)
+                    ->with('success', count($ids) . ' record(s) deleted successfully.');
+            } elseif ($validated['action'] === 'update') {
+                $field = $validated['field'];
+                $value = $validated['value'];
+
+                // Update records
+                DB::table($menu->table_name)
+                    ->whereIn('id', $ids)
+                    ->update([$field => $value]);
+
+                // Log bulk update activity
+                activity()
+                    ->causedBy(Auth::user())
+                    ->withProperties([
+                        'table' => $menu->table_name,
+                        'menu_id' => $menuId,
+                        'menu_name' => $menu->name,
+                        'record_ids' => $ids,
+                        'count' => count($ids),
+                        'field' => $field,
+                        'value' => $value
+                    ])
+                    ->log('bulk_updated');
+
+                return redirect()->route('dynamic.index', $menuId)
+                    ->with('success', count($ids) . ' record(s) updated successfully.');
+            }
+        } catch (\Exception $e) {
+            return redirect()->route('dynamic.index', $menuId)
+                ->with('error', 'Bulk action failed: ' . $e->getMessage());
+        }
+
+        return redirect()->route('dynamic.index', $menuId);
     }
 
     /**
@@ -413,5 +641,133 @@ class DynamicCrudController extends Controller
         }
 
         return $validated;
+    }
+
+    /**
+     * Check if a record is being used in other tables (foreign key check)
+     */
+    private function checkRecordUsage($tableName, $recordId)
+    {
+        $schema = strtoupper(config('database.connections.hana.schema'));
+        $usedInTables = [];
+
+        // Get all menus to check their tables
+        $allMenus = Menu::all();
+
+        foreach ($allMenus as $menu) {
+            // Skip the current table
+            if ($menu->table_name === $tableName) {
+                continue;
+            }
+
+            // Check if this table has any foreign key pointing to our table
+            $relationships = $menu->getRelationships();
+
+            foreach ($relationships as $rel) {
+                // If this relationship points to our table
+                if ($rel['related_table'] === $tableName) {
+                    // Check if any records use this ID
+                    $count = DB::table($menu->table_name)
+                        ->where($rel['foreign_key'], $recordId)
+                        ->count();
+
+                    if ($count > 0) {
+                        $usedInTables[] = $menu->name . " ({$count} record" . ($count > 1 ? 's' : '') . ")";
+                    }
+                }
+            }
+        }
+
+        return [
+            'in_use' => !empty($usedInTables),
+            'tables' => implode(', ', $usedInTables),
+            'count' => count($usedInTables)
+        ];
+    }
+
+    /**
+     * Get hasMany relationships (tables that reference this table)
+     */
+    private function getHasManyRelationships($menu, $recordId)
+    {
+        $hasMany = [];
+        $allMenus = Menu::all();
+
+        foreach ($allMenus as $relatedMenu) {
+            // Skip the current table
+            if ($relatedMenu->table_name === $menu->table_name) {
+                continue;
+            }
+
+            // Check if this table has any foreign key pointing to our table
+            $relationships = $relatedMenu->getRelationships();
+
+            foreach ($relationships as $rel) {
+                // If this relationship points to our table
+                if ($rel['related_table'] === $menu->table_name) {
+                    // Get count of related records
+                    $count = DB::table($relatedMenu->table_name)
+                        ->where($rel['foreign_key'], $recordId)
+                        ->count();
+
+                    // Get related records (limit to 10 for display)
+                    $records = DB::table($relatedMenu->table_name)
+                        ->where($rel['foreign_key'], $recordId)
+                        ->limit(10)
+                        ->get();
+
+                    // Get display fields (first 3 non-system fields)
+                    $fields = $relatedMenu->getFieldDefinitions();
+                    $displayFields = [];
+                    foreach ($fields as $field) {
+                        if (!in_array($field['name'], ['id', 'created_at', 'updated_at', $rel['foreign_key']]) && count($displayFields) < 3) {
+                            $displayFields[] = $field['name'];
+                        }
+                    }
+
+                    // Get singular form of table name
+                    $singular = rtrim($relatedMenu->name, 's');
+
+                    $hasMany[] = [
+                        'table' => $relatedMenu->table_name,
+                        'label' => $relatedMenu->name,
+                        'singular' => $singular,
+                        'menu_id' => $relatedMenu->id,
+                        'foreign_key' => $rel['foreign_key'],
+                        'count' => $count,
+                        'records' => $records,
+                        'display_fields' => $displayFields,
+                    ];
+                }
+            }
+        }
+
+        return $hasMany;
+    }
+
+    /**
+     * Check if user has permission to access menu
+     */
+    private function checkMenuPermission($menu, $action)
+    {
+        /** @var \App\Models\User $user */
+        $user = Auth::user();
+
+        // Admin has access to everything
+        if ($user->hasRole('admin')) {
+            return true;
+        }
+
+        // Build permission name: menu_slug.action
+        // Example: categories.view, products.create
+        $menuSlug = strtolower(str_replace(' ', '_', $menu->name));
+        $permissionName = "{$menuSlug}.{$action}";
+
+        // Check if user has permission
+        if (!$user->can($permissionName)) {
+            abort(403, "You don't have permission to {$action} {$menu->name}");
+        }
+
+        return true;
     }
 }

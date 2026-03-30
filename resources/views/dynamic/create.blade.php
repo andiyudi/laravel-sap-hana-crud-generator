@@ -55,8 +55,10 @@
                                                 $itemId = is_array($item) ? $item['id'] : $item->id;
                                                 $displayCol = $relatedData[$field['name']]['display_column'];
                                                 $displayValue = is_array($item) ? $item[$displayCol] : $item->$displayCol;
+                                                // Pre-fill from query parameter if exists
+                                                $preSelected = old($field['name']) ?: request($field['name']);
                                             @endphp
-                                            <option value="{{ $itemId }}" {{ old($field['name']) == $itemId ? 'selected' : '' }}>
+                                            <option value="{{ $itemId }}" {{ $preSelected == $itemId ? 'selected' : '' }}>
                                                 {{ $displayValue }}
                                             </option>
                                         @endforeach

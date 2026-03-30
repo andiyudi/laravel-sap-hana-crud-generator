@@ -41,23 +41,36 @@ class RolePermissionSeeder extends Seeder
 
         // Admin role - has all permissions
         $admin = Role::firstOrCreate(['name' => 'admin', 'guard_name' => 'web']);
-        $admin->syncPermissions($basePermissions);
+        $admin->syncPermissions(Permission::all());
 
-        // Editor role - can manage content but not users/roles
+        // Editor role - can view and edit dynamic menus, but cannot delete or manage users
         $editor = Role::firstOrCreate(['name' => 'editor', 'guard_name' => 'web']);
-        $editor->syncPermissions([
-            'menus.view',
-            'menus.create',
-            'menus.edit',
-        ]);
+        $editorPermissions = Permission::where('name', 'like', '%.view')
+            ->orWhere('name', 'like', '%.create')
+            ->orWhere('name', 'like', '%.edit')
+            ->get()
+            ->pluck('name')
+            ->filter(function ($perm) {
+                // Exclude user management permissions
+                return !str_starts_with($perm, 'users.') &&
+                    !str_starts_with($perm, 'roles.') &&
+                    !str_starts_with($perm, 'permissions.');
+            })
+            ->toArray();
+        $editor->syncPermissions($editorPermissions);
 
-        // Viewer role - read-only access
+        // Viewer role - read-only access to all menus (NO access to user management)
         $viewer = Role::firstOrCreate(['name' => 'viewer', 'guard_name' => 'web']);
-        $viewer->syncPermissions([
-            'users.view',
-            'roles.view',
-            'permissions.view',
-            'menus.view',
-        ]);
+        $viewerPermissions = Permission::where('name', 'like', '%.view')
+            ->get()
+            ->pluck('name')
+            ->filter(function ($perm) {
+                // Exclude user management permissions
+                return !str_starts_with($perm, 'users.') &&
+                    !str_starts_with($perm, 'roles.') &&
+                    !str_starts_with($perm, 'permissions.');
+            })
+            ->toArray();
+        $viewer->syncPermissions($viewerPermissions);
     }
 }

@@ -1,249 +1,152 @@
-# Dynamic Permissions - Automatic Permission Creation
+# Dynamic Menu Permissions
 
 ## Overview
+Sistem permission otomatis untuk dynamic menus menggunakan Spatie Laravel Permission.
 
-Sistem Menu Management sekarang dilengkapi dengan fitur **Dynamic Permissions** yang secara otomatis membuat permission saat menu dibuat.
+## Permission Structure
 
-## Status: ✅ IMPLEMENTED
+Setiap menu memiliki 4 permissions:
+- `{menu_slug}.view` - Melihat list dan detail
+- `{menu_slug}.create` - Membuat record baru
+- `{menu_slug}.edit` - Mengubah record
+- `{menu_slug}.delete` - Menghapus record
 
-## How It Works
+Contoh untuk menu "Categories":
+- `categories.view`
+- `categories.create`
+- `categories.edit`
+- `categories.delete`
 
-### 1. Automatic Permission Creation
+## Roles
 
-Saat Anda membuat menu baru, sistem akan otomatis membuat 4 permission:
-- `{menu_slug}.view` - Melihat data
-- `{menu_slug}.create` - Membuat data baru
-- `{menu_slug}.edit` - Mengedit data
-- `{menu_slug}.delete` - Menghapus data
+### Admin
+- Memiliki SEMUA permissions
+- Akses penuh ke semua menu dan fitur
 
-### 2. Menu Slug Generation
+### Editor
+- Dapat view, create, dan edit semua dynamic menus
+- TIDAK dapat delete
+- TIDAK dapat manage users, roles, permissions
 
-Menu slug dibuat dari nama menu dengan aturan:
-- Lowercase
-- Spasi diganti underscore
-- Contoh: "User Data" → "user_data"
+### Viewer
+- Hanya dapat view (read-only)
+- Tidak dapat create, edit, atau delete
+- Akses ke semua menu tapi read-only
 
-### 3. Auto-Assign to Admin
+## Generate Permissions
 
-Semua permission yang dibuat otomatis di-assign ke role `admin`.
+Setiap kali membuat menu baru, jalankan command:
 
-## Example
-
-### Membuat Menu "Products"
-
-**Input:**
-- Name: Products
-- Table: products
-- Icon: bi-box-seam
-
-**Output (Automatic):**
-```
-✓ Menu created: Products
-✓ Permissions created:
-  - products.view
-  - products.create
-  - products.edit
-  - products.delete
-✓ Permissions assigned to admin role
+```bash
+php artisan permissions:generate-menu
 ```
 
-## Base Permissions
+Command ini akan:
+1. Generate 4 permissions untuk setiap menu
+2. Assign semua permissions ke role admin
+3. Update permissions untuk role editor dan viewer
 
-Sistem sudah memiliki base permissions untuk management:
+## Update Role Permissions
 
-### User Management:
-- users.view
-- users.create
-- users.edit
-- users.delete
+Untuk update permissions role secara manual:
 
-### Role Management:
-- roles.view
-- roles.create
-- roles.edit
-- roles.delete
+```bash
+php artisan db:seed --class=RolePermissionSeeder
+```
 
-### Permission Management:
-- permissions.view
-- permissions.create
-- permissions.edit
-- permissions.delete
+## Cara Kerja
 
-### Menu Management:
-- menus.view
-- menus.create
-- menus.edit
-- menus.delete
-
-## Dynamic Permissions
-
-Setiap menu yang dibuat akan menambah 4 permission baru:
-
-### Example: Menu "Categories"
-- categories.view
-- categories.create
-- categories.edit
-- categories.delete
-
-### Example: Menu "Orders"
-- orders.view
-- orders.create
-- orders.edit
-- orders.delete
-
-## Permission Deletion
-
-Saat menu dihapus, permission terkait juga akan dihapus otomatis untuk menjaga kebersihan database.
-
-## Implementation Details
-
-### MenuController.php
-
+### 1. Controller Check
+Setiap method di `DynamicCrudController` mengecek permission:
 ```php
-private function createMenuPermissions(Menu $menu)
-{
-    $slug = strtolower(str_replace(' ', '_', $menu->name));
-    
-    $permissions = [
-        "{$slug}.view",
-        "{$slug}.create",
-        "{$slug}.edit",
-        "{$slug}.delete",
-    ];
-
-    foreach ($permissions as $permission) {
-        Permission::firstOrCreate([
-            'name' => $permission,
-            'guard_name' => 'web'
-        ]);
-    }
-
-    // Assign to admin role
-    $adminRole = Role::where('name', 'admin')->first();
-    if ($adminRole) {
-        $adminRole->givePermissionTo($permissions);
-    }
-}
+$this->checkMenuPermission($menu, 'view');  // untuk index, show
+$this->checkMenuPermission($menu, 'create'); // untuk create, store
+$this->checkMenuPermission($menu, 'edit');   // untuk edit, update
+$this->checkMenuPermission($menu, 'delete'); // untuk destroy
 ```
 
-## Benefits
-
-### 1. Zero Configuration
-- Tidak perlu manual membuat permission
-- Tidak perlu update seeder
-- Tidak perlu assign permission ke role
-
-### 2. Consistent Naming
-- Semua permission mengikuti pattern yang sama
-- Mudah diprediksi dan di-manage
-
-### 3. Automatic Cleanup
-- Permission dihapus saat menu dihapus
-- Tidak ada orphaned permissions
-
-### 4. Role Integration
-- Admin role otomatis mendapat akses
-- Role lain bisa di-assign manual sesuai kebutuhan
-
-## Usage in Controllers
-
-Untuk menggunakan permission di controller:
-
+### 2. Sidebar Filter
+Sidebar hanya menampilkan menu yang user punya akses:
 ```php
-// Check permission
-if (auth()->user()->can('products.view')) {
-    // User can view products
-}
-
-// Middleware
-Route::middleware(['permission:products.create'])->group(function () {
-    // Routes that require products.create permission
-});
-
-// In controller constructor
-public function __construct()
-{
-    $this->middleware('permission:products.view')->only(['index', 'show']);
-    $this->middleware('permission:products.create')->only(['create', 'store']);
-    $this->middleware('permission:products.edit')->only(['edit', 'update']);
-    $this->middleware('permission:products.delete')->only(['destroy']);
-}
+$canView = $user->hasRole('admin') || $user->can("{$menuSlug}.view");
 ```
 
-## Usage in Blade Views
-
+### 3. View Buttons
+Tombol create, edit, delete di view harus dicek:
 ```blade
-@can('products.create')
-    <a href="{{ route('products.create') }}" class="btn btn-primary">
-        Add Product
+@can("{$menuSlug}.create")
+    <a href="{{ route('dynamic.create', $menu->id) }}" class="btn btn-primary">
+        Create New
     </a>
-@endcan
-
-@can('products.edit')
-    <a href="{{ route('products.edit', $product) }}" class="btn btn-warning">
-        Edit
-    </a>
-@endcan
-
-@can('products.delete')
-    <form method="POST" action="{{ route('products.destroy', $product) }}">
-        @csrf
-        @method('DELETE')
-        <button type="submit" class="btn btn-danger">Delete</button>
-    </form>
 @endcan
 ```
-
-## Future Enhancements
-
-Possible improvements:
-- [ ] Custom permission names per menu
-- [ ] Granular permission control (field-level)
-- [ ] Permission templates
-- [ ] Bulk permission assignment
-- [ ] Permission inheritance
-- [ ] API permission support
 
 ## Testing
 
-### Test Permission Creation:
+### Test sebagai Editor:
+1. Login dengan user role editor
+2. Bisa lihat semua menu
+3. Bisa create dan edit
+4. TIDAK bisa delete (tombol delete tidak muncul)
 
-1. Create a new menu via UI
-2. Check permissions table:
-```bash
-php artisan tinker
->>> \Spatie\Permission\Models\Permission::where('name', 'like', 'your_menu%')->get()
+### Test sebagai Viewer:
+1. Login dengan user role viewer
+2. Bisa lihat semua menu
+3. TIDAK bisa create (tombol create tidak muncul)
+4. TIDAK bisa edit (tombol edit tidak muncul)
+5. TIDAK bisa delete (tombol delete tidak muncul)
+
+## Assign Permission ke User
+
+```php
+// Assign role
+$user->assignRole('editor');
+
+// Atau assign permission spesifik
+$user->givePermissionTo('categories.view');
+$user->givePermissionTo('products.edit');
 ```
 
-3. Verify admin has permissions:
-```bash
->>> $admin = \Spatie\Permission\Models\Role::where('name', 'admin')->first()
->>> $admin->permissions->pluck('name')
+## Custom Permissions
+
+Untuk permission khusus, tambahkan manual:
+
+```php
+use Spatie\Permission\Models\Permission;
+
+Permission::create(['name' => 'categories.export']);
+Permission::create(['name' => 'products.import']);
+```
+
+Lalu assign ke role:
+
+```php
+$editor = Role::findByName('editor');
+$editor->givePermissionTo('categories.export');
 ```
 
 ## Troubleshooting
 
-### Permission not created
-- Check if menu was created successfully
-- Verify Spatie Permission is installed
-- Check database connection
+### User masih bisa akses semua menu
+- Pastikan sudah run `php artisan permissions:generate-menu`
+- Pastikan sudah run `php artisan db:seed --class=RolePermissionSeeder`
+- Clear cache: `php artisan cache:clear`
+- Check role user: `$user->getRoleNames()`
 
-### Permission not assigned to admin
-- Verify admin role exists
-- Check role name is exactly 'admin'
-- Run seeder to create base roles
+### Permission denied error
+- Check permission name sesuai format: `{menu_slug}.{action}`
+- Check user punya role atau permission: `$user->can('categories.view')`
+- Check di database table `permissions` dan `role_has_permissions`
 
-### Permission not working
-- Clear permission cache: `php artisan permission:cache-reset`
-- Check middleware is applied
-- Verify user has the role
+### Menu tidak muncul di sidebar
+- Check permission view: `$user->can("{$menuSlug}.view")`
+- Check menu is_active = 1
+- Check menu order
 
-## Conclusion
+## Best Practices
 
-Dynamic Permissions membuat sistem lebih fleksibel dan mudah digunakan. Setiap menu yang dibuat otomatis mendapat permission yang sesuai, tanpa perlu konfigurasi manual.
-
----
-
-**Status**: ✅ FULLY IMPLEMENTED AND TESTED
-
-**Date**: March 26, 2026
+1. Selalu generate permissions setelah create menu baru
+2. Gunakan role untuk group permissions
+3. Assign role ke user, bukan individual permissions
+4. Test dengan user non-admin
+5. Dokumentasikan custom permissions

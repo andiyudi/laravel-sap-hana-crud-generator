@@ -10,6 +10,7 @@ use Spatie\Permission\Traits\HasRoles;
 /**
  * @property int $id
  * @property string $name
+ * @property string $username
  * @property string $email
  * @property string $password
  * @property string|null $remember_token
@@ -21,7 +22,7 @@ class User extends Authenticatable
     /** @use HasFactory<\Database\Factories\UserFactory> */
     use HasFactory, Notifiable, HasRoles;
 
-    protected $fillable = ['name', 'email', 'password'];
+    protected $fillable = ['name', 'username', 'email', 'password'];
 
     protected $hidden = ['password', 'remember_token'];
 

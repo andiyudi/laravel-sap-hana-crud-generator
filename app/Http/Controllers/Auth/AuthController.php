@@ -21,15 +21,23 @@ class AuthController extends Controller
 
     /**
      * Proses login user.
-     * Precondition: email dan password tersedia di request
+     * Precondition: login (username/email) dan password tersedia di request
      * Postcondition: jika valid → redirect ke dashboard; jika tidak → kembali dengan error
      */
     public function login(Request $request): RedirectResponse
     {
         $credentials = $request->validate([
-            'email'    => ['required', 'email'],
+            'login'    => ['required', 'string'],
             'password' => ['required'],
         ]);
+
+        // Determine if login is email or username
+        $loginType = filter_var($request->login, FILTER_VALIDATE_EMAIL) ? 'email' : 'username';
+
+        $credentials = [
+            $loginType => $request->login,
+            'password' => $request->password,
+        ];
 
         if (Auth::attempt($credentials, $request->boolean('remember'))) {
             $request->session()->regenerate();
@@ -38,8 +46,8 @@ class AuthController extends Controller
         }
 
         return back()->withErrors([
-            'email' => 'Email atau password tidak valid.',
-        ])->onlyInput('email');
+            'login' => 'Username/Email atau password tidak valid.',
+        ])->onlyInput('login');
     }
 
     /**

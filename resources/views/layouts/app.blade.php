@@ -125,6 +125,12 @@
                         <li><h6 class="dropdown-header">{{ auth()->user()->email }}</h6></li>
                         <li><hr class="dropdown-divider"></li>
                         <li>
+                            <a class="dropdown-item" href="{{ route('profile.index') }}">
+                                <i class="bi bi-person me-2"></i>My Profile
+                            </a>
+                        </li>
+                        <li><hr class="dropdown-divider"></li>
+                        <li>
                             <form method="POST" action="{{ route('logout') }}">
                                 @csrf
                                 <button type="submit" class="dropdown-item text-danger">
@@ -150,66 +156,94 @@
                 </li>
 
                 <!-- Menu Builder Section -->
-                <li class="nav-item mt-3">
-                    <h6 class="px-3 text-muted text-uppercase small">Menu Builder</h6>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link {{ request()->routeIs('tables.create') ? 'active' : '' }}" href="{{ route('tables.create') }}">
-                        <i class="bi bi-plus-square me-2"></i>
-                        Create Table
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link {{ request()->routeIs('tables.add-column') ? 'active' : '' }}" href="{{ route('tables.add-column') }}">
-                        <i class="bi bi-plus-circle me-2"></i>
-                        Add Column
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link {{ request()->routeIs('menus.*') ? 'active' : '' }}" href="{{ route('menus.index') }}">
-                        <i class="bi bi-list-ul me-2"></i>
-                        Manage Menus
-                    </a>
-                </li>
+                @if(auth()->user()->hasRole('admin'))
+                    <li class="nav-item mt-3">
+                        <h6 class="px-3 text-muted text-uppercase small">Menu Builder</h6>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {{ request()->routeIs('tables.create') ? 'active' : '' }}" href="{{ route('tables.create') }}">
+                            <i class="bi bi-plus-square me-2"></i>
+                            Create Table
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {{ request()->routeIs('tables.add-column') ? 'active' : '' }}" href="{{ route('tables.add-column') }}">
+                            <i class="bi bi-plus-circle me-2"></i>
+                            Add Column
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link {{ request()->routeIs('menus.*') ? 'active' : '' }}" href="{{ route('menus.index') }}">
+                            <i class="bi bi-list-ul me-2"></i>
+                            Manage Menus
+                        </a>
+                    </li>
+                @endif
 
                 <!-- Dynamic Menus Section -->
                 @php
                     $dynamicMenus = \App\Models\Menu::active()->ordered()->get();
+                    $user = auth()->user();
                 @endphp
                 @if($dynamicMenus->isNotEmpty())
                     <li class="nav-item mt-3">
                         <h6 class="px-3 text-muted text-uppercase small">Dynamic Menus</h6>
                     </li>
                     @foreach($dynamicMenus as $dynamicMenu)
-                        <li class="nav-item">
-                            <a class="nav-link {{ request()->is('dynamic/' . $dynamicMenu->id . '*') ? 'active' : '' }}" href="{{ route('dynamic.index', $dynamicMenu->id) }}">
-                                <i class="bi {{ $dynamicMenu->icon ?? 'bi-table' }} me-2"></i>
-                                {{ $dynamicMenu->name }}
-                            </a>
-                        </li>
+                        @php
+                            $menuSlug = strtolower(str_replace(' ', '_', $dynamicMenu->name));
+                            $canView = $user->hasRole('admin') || $user->can("{$menuSlug}.view");
+                        @endphp
+                        @if($canView)
+                            <li class="nav-item">
+                                <a class="nav-link {{ request()->is('crud/' . $dynamicMenu->id . '*') ? 'active' : '' }}" href="{{ route('dynamic.index', $dynamicMenu->id) }}">
+                                    <i class="bi {{ $dynamicMenu->icon ?? 'bi-table' }} me-2"></i>
+                                    {{ $dynamicMenu->name }}
+                                </a>
+                            </li>
+                        @endif
                     @endforeach
                 @endif
 
                 <!-- User Management Section -->
+                @if(auth()->user()->hasRole('admin') || auth()->user()->can('users.view'))
+                    <li class="nav-item mt-3">
+                        <h6 class="px-3 text-muted text-uppercase small">User Management</h6>
+                    </li>
+                    @can('users.view')
+                        <li class="nav-item">
+                            <a class="nav-link {{ request()->routeIs('users.*') ? 'active' : '' }}" href="{{ route('users.index') }}">
+                                <i class="bi bi-people me-2"></i>
+                                Users
+                            </a>
+                        </li>
+                    @endcan
+                    @can('roles.view')
+                        <li class="nav-item">
+                            <a class="nav-link {{ request()->routeIs('roles.*') ? 'active' : '' }}" href="{{ route('roles.index') }}">
+                                <i class="bi bi-shield-check me-2"></i>
+                                Roles
+                            </a>
+                        </li>
+                    @endcan
+                    @can('permissions.view')
+                        <li class="nav-item">
+                            <a class="nav-link {{ request()->routeIs('permissions.*') ? 'active' : '' }}" href="{{ route('permissions.index') }}">
+                                <i class="bi bi-key me-2"></i>
+                                Permissions
+                            </a>
+                        </li>
+                    @endcan
+                @endif
+
+                <!-- System Section -->
                 <li class="nav-item mt-3">
-                    <h6 class="px-3 text-muted text-uppercase small">User Management</h6>
+                    <h6 class="px-3 text-muted text-uppercase small">System</h6>
                 </li>
                 <li class="nav-item">
-                    <a class="nav-link {{ request()->routeIs('users.*') ? 'active' : '' }}" href="{{ route('users.index') }}">
-                        <i class="bi bi-people me-2"></i>
-                        Users
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link {{ request()->routeIs('roles.*') ? 'active' : '' }}" href="{{ route('roles.index') }}">
-                        <i class="bi bi-shield-check me-2"></i>
-                        Roles
-                    </a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link {{ request()->routeIs('permissions.*') ? 'active' : '' }}" href="{{ route('permissions.index') }}">
-                        <i class="bi bi-key me-2"></i>
-                        Permissions
+                    <a class="nav-link {{ request()->routeIs('activity-log.*') ? 'active' : '' }}" href="{{ route('activity-log.index') }}">
+                        <i class="bi bi-clock-history me-2"></i>
+                        Activity Log
                     </a>
                 </li>
             </ul>
